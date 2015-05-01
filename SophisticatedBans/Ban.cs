@@ -13,6 +13,7 @@ namespace SophisticatedBans
     {
         public Ban()
         {
+	        RowId = -1;
             IPv4Address = "";
             UserId = -2;
             UserAccountName = "";
@@ -21,11 +22,15 @@ namespace SophisticatedBans
 
         public Ban(string ip, int id, string uan, string name)
         {
+			RowId = -1;
             IPv4Address = ip;
             UserId = id;
             UserAccountName = uan;
             CharacterName = name;
         }
+
+		//Database prim key
+		public int RowId { get; set; }
 
         //Methods for bans
         public String IPv4Address { get; set; }

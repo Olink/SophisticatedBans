@@ -13,6 +13,7 @@ using Newtonsoft.Json.Bson;
 using Terraria;
 using TerrariaApi.Server;
 using TShockAPI;
+using TShockAPI.DB;
 
 namespace SophisticatedBans
 {
@@ -110,7 +111,7 @@ namespace SophisticatedBans
 
         private void RegisterCommands()
         {
-            TShockAPI.Commands.ChatCommands.Add(new Command("managebans", HandleBans, "sban"));
+            Commands.ChatCommands.Add(new Command("managebans", HandleBans, "sban"));
         }
 
         private void DeregisterHandlers()
@@ -125,13 +126,14 @@ namespace SophisticatedBans
             var bans = banManager.GetBans(ban).ToList();
             if (bans.Count > 0)
             {
-                TShock.Utils.ForceKick(TShock.Players[args.Who], bans[0].BanReason, true, false);
+                TShock.Players[args.Who].Disconnect(String.Format("Banned: {0}", String.IsNullOrEmpty(ban.BanReason) ? "No reason specified." : ban.BanReason));
                 args.Handled = true;
             }
         }
 
         //Command Handlers
         private const string ADD_BAN = "add";
+		private const string FIND_BAN = "find";
         private void HandleBans(CommandArgs args)
         {
             if (args.Parameters.Count < 1)
@@ -145,6 +147,9 @@ namespace SophisticatedBans
                     case ADD_BAN:
                         AddBan(args);
                         break;
+					case FIND_BAN:
+		                FindBan(args);
+		                break;
                     default:
                         ShowUsage(args.Player);
                         break;
@@ -152,12 +157,6 @@ namespace SophisticatedBans
             }
         }
 
-        private const string IP_PARAM = "-ip";
-        private const string ID_PARAM = "-id";
-        private const string UAN_PARAM = "-account";
-        private const string CN_PARAM = "-name";
-        private const string EXPIR_PARAM = "-expires";
-        private const string REASON_PARAM = "-reason";
         private void AddBan(CommandArgs args)
         {
             if (args.Parameters.Count < 3 || args.Parameters.Count % 2 != 1)
@@ -166,52 +165,143 @@ namespace SophisticatedBans
             }
             else
             {
-                Ban ban = new Ban() {Banner = TShock.Users.GetUserByID(args.Player.UserID), BanIssued = DateTime.Now, BanExpires = -1};
-                for (int i = 1; i < args.Parameters.Count; i++)
-                {
-                    string key = args.Parameters[i].ToLower();
-                    string value = args.Parameters[++i];
-                    switch (key)
-                    {
-                        case IP_PARAM:
-                            ban.IPv4Address = value;
-                            break;
-                        case ID_PARAM:
-                            int userid = -1;
-                            if (!Int32.TryParse(value, out userid))
-                            {
-                                args.Player.SendErrorMessage("UserID Param requires a numerical value.");
-                                return;
-                            }
-                            ban.UserId = userid;
-                            break;
-                        case UAN_PARAM:
-                            ban.UserAccountName = value;
-                            break;
-                        case CN_PARAM:
-                            ban.CharacterName = value;
-                            break;
-                        case EXPIR_PARAM:
-                            Int64 expires = -1;
-                            if (!ParseExpiration(value, out expires))
-                            {
-                                args.Player.SendErrorMessage("Expiration Param requires '1y2M3d4h5m6s' format, with at least one of the specifiers.");
-                                return;
-                            }
-                            ban.BanExpires = expires;
-                            break;
-                        case REASON_PARAM:
-                            ban.BanReason = value;
-                            break;
-                        default:
-                            args.Player.SendErrorMessage("The argument {0} is undefined.", key);
-                            return;
-                    }
-                }
-                banManager.InsertBan(ban);
-                args.Player.SendSuccessMessage("Successfully added ban.");
+	            Ban ban = new Ban();
+	            try
+	            {
+					ParseArguments(args.Parameters.GetRange(1, args.Parameters.Count - 1), out ban);
+		            ban.Banner = TShock.Users.GetUserByID(args.Player.UserID);
+		            ban.BanIssued = DateTime.Now;
+					banManager.InsertBan(ban);
+					args.Player.SendSuccessMessage("Successfully added ban.");
+	            }
+				catch (ArgumentException e)
+				{
+					args.Player.SendErrorMessage(e.Message);
+				}
             }
         }
+
+	    private void FindBan(CommandArgs args)
+	    {
+		    if (args.Parameters.Count < 3 || args.Parameters.Count%2 != 1)
+		    {
+			    ShowFindUsage(args.Player);
+		    }
+		    else
+		    {
+				Ban ban = new Ban();
+			    try
+			    {
+					ParseArguments(args.Parameters.GetRange(1, args.Parameters.Count - 1), out ban);
+					if (ban.Banner != null)
+				    {
+					    try
+					    {
+							User u = TShock.Users.GetUser(ban.Banner);
+							if (u != null)
+								ban.Banner = u;
+					    }
+					    catch (UserNotExistException e)
+					    {
+						    ban.Banner = null;
+					    }
+				    }
+				    List<Ban> bans = banManager.GetBans(ban).ToList();
+				    foreach (Ban b in bans)
+				    {
+					    string searchParams = "";
+					    if (!String.IsNullOrEmpty(b.IPv4Address))
+						    searchParams = b.IPv4Address;
+					    if (!String.IsNullOrEmpty(b.UserAccountName))
+					    {
+						    if (searchParams != "")
+							    searchParams += " ";
+						    searchParams += "Account Name - " + b.UserAccountName;
+					    }
+						if (b.UserId >= 0)
+						{
+							if (searchParams != "")
+								searchParams += " ";
+							searchParams += "User ID - " + b.UserId;
+						}
+						if (!String.IsNullOrEmpty(b.CharacterName))
+						{
+							if (searchParams != "")
+								searchParams += " ";
+							searchParams += "Character Name - " + b.CharacterName;
+						}
+
+					    string duration = b.BanExpires > 0 ? "until " + b.BanIssued.AddSeconds(b.BanExpires).ToString() : "forever";
+					    string reason = String.IsNullOrEmpty(b.BanReason) ? "for no reason specified" : b.BanReason;
+						args.Player.SendInfoMessage("[{6}] {0}{1} banned {2} on {3} {4} {5}.", b.Banner == null ? "Console" : b.Banner.Name, b.Banner == null ? "" : "(" + b.Banner.ID + ")", searchParams, b.BanIssued.ToString(), duration, reason, b.RowId);
+				    }
+			    }
+			    catch (ArgumentException e)
+			    {
+				    args.Player.SendErrorMessage(e.Message);
+			    }
+		    }
+	    }
+
+		private const string IP_PARAM = "-ip";
+		private const string ID_PARAM = "-id";
+		private const string UAN_PARAM = "-a";
+		private const string CN_PARAM = "-n";
+		private const string EXPIR_PARAM = "-e";
+		private const string REASON_PARAM = "-r";
+	    private const string BANNER_PARAM = "-b";
+	    private void ParseArguments(List<String> args, out Ban ban)
+	    {
+		    ban = new Ban();
+			for (int i = 0; i < args.Count; i++)
+			{
+				string key = args[i].ToLower();
+				string value = args[++i];
+				switch (key)
+				{
+					case IP_PARAM:
+						ban.IPv4Address = value;
+						break;
+					case ID_PARAM:
+						int userid = -1;
+						if (!Int32.TryParse(value, out userid))
+						{
+							throw new ArgumentException("UserID Param requires a numerical value.");
+						}
+						ban.UserId = userid;
+						break;
+					case UAN_PARAM:
+						ban.UserAccountName = value;
+						break;
+					case CN_PARAM:
+						ban.CharacterName = value;
+						break;
+					case EXPIR_PARAM:
+						Int64 expires = -1;
+						if (!ParseExpiration(value, out expires))
+						{
+							throw new ArgumentException("Expiration Param requires '1y2M3d4h5m6s' format, with at least one of the specifiers.");
+						}
+						ban.BanExpires = expires;
+						break;
+					case REASON_PARAM:
+						ban.BanReason = value;
+						break;
+					case BANNER_PARAM:
+						User u = new User();
+						int id = -1;
+						u.Name = value;
+						if (Int32.TryParse(value, out id))
+						{
+							u.ID = id;
+						}
+						ban.Banner = u;
+						break;
+					default:
+						throw new ArgumentException("The argument {0} is undefined.", key);
+				}
+			}
+	    }
 
         private const string YEAR_PARAM = "y";
         private const string MONTH_PARAM = "M";
@@ -294,12 +384,18 @@ namespace SophisticatedBans
 
         private void ShowUsage(TSPlayer player)
         {
-            player.SendErrorMessage("Usage: /sban add [-ip xxx.xxx.xxx.xxx] [-id 1] [-account 'login name'] [-name 'player name'] [-expires '4d5h'] [-reason 'This is the reason they were banned.']");
+	        ShowAddUsage(player);
+			ShowFindUsage(player);
         }
         
         private void ShowAddUsage(TSPlayer player)
         {
-            player.SendErrorMessage("Usage: /sban add [-ip xxx.xxx.xxx.xxx] [-id 1] [-account 'login name'] [-name 'player name'] [-expires '4d5h'] [-reason 'This is the reason they were banned.']");
+            player.SendErrorMessage("Usage: /sban add [-ip xxx.xxx.xxx.xxx] [-id 1] [-a 'login name'] [-n 'player name'] [-e '4d5h'] [-r 'This is the reason they were banned.']");
         }
+
+		private void ShowFindUsage(TSPlayer player)
+		{
+			player.SendErrorMessage("Usage: /sban find [-ip xxx.xxx.xxx.xxx] [-id 1] [-a 'login name'] [-n 'player name'] [-e '4d5h'] [-r 'This is the reason they were banned.'] [-b AccountName/UserID]");
+		}
     }
 }

@@ -49,7 +49,7 @@ namespace SophisticatedBans
                                ban.UserId, 
                                ban.UserAccountName, 
                                ban.CharacterName,
-                               ban.Banner,
+                               ban.Banner != null ? ban.Banner.ID : -1,
                                Utils.ConvertToUnixTime(ban.BanIssued),
                                ban.BanExpires,
                                ban.BanReason) != 1)
@@ -62,22 +62,22 @@ namespace SophisticatedBans
         {
             List<Ban> bans = new List<Ban>();
 
-			//" OR @2 LIKE Bans.UserAccountName OR @3 LIKE Bans.CharacterName";
-	        string queryWhere = "";
+	        string queryWhere = "WHERE ";
 	        int index = 0;
 			List<object> args = new List<object>();
 	        if (!String.IsNullOrEmpty(lookup.IPv4Address))
 	        {
 		        queryWhere += "@" + index.ToString() + " LIKE Bans.IP";
+		        queryWhere += " OR Bans.IP LIKE @" + index.ToString();
 		        index++;
 		        args.Add(lookup.IPv4Address);
 	        }
 	        
-			if (lookup.UserId != -1)
+			if (lookup.UserId >= 0)
 	        {
 		        if (queryWhere != "")
 			        queryWhere += " OR ";
-				queryWhere += "ID = @" + index.ToString();
+				queryWhere += "Bans.ID = @" + index.ToString();
 				index++;
 				args.Add(lookup.UserId);
 	        }
@@ -87,6 +87,7 @@ namespace SophisticatedBans
 		        if (queryWhere != "")
 			        queryWhere += " OR ";
 		        queryWhere += "@" + index.ToString() + " LIKE Bans.UserAccountName";
+		        queryWhere += " OR Bans.UserAccountName LIKE @" + index.ToString();
 				index++;
 				args.Add(lookup.UserAccountName);
 	        }
@@ -96,28 +97,53 @@ namespace SophisticatedBans
 		        if (queryWhere != "")
 			        queryWhere += " OR ";
 		        queryWhere += "@" + index.ToString() + " LIKE Bans.CharacterName";
+		        queryWhere += " OR Bans.CharacterName LIKE @" + index.ToString();
 				index++;
 				args.Add(lookup.CharacterName);
 	        }
 
-	        var query = String.Format("SELECT * FROM Bans WHERE {0}", queryWhere);
+			if (!String.IsNullOrEmpty(lookup.BanReason))
+			{
+				if (queryWhere != "")
+					queryWhere += " OR ";
+				queryWhere += "@" + index.ToString() + " LIKE Bans.Reason";
+				queryWhere += " OR Bans.Reason LIKE @" + index.ToString();
+				index++;
+				args.Add(lookup.BanReason);
+			}
 
-            using (var reader = database.QueryReader(query, args.ToArray()))
-            {
-                while (reader.Read())
-                {
-                    Ban b = new Ban(reader.Get<string>("IP"),
-                        reader.Get<int>("ID"),
-                        reader.Get<string>("UserAccountName"),
-                        reader.Get<string>("CharacterName"));
-                    b.Banner = TShock.Users.GetUserByID(reader.Get<int>("BanningUser"));
-                    b.BanIssued = Utils.UnixTimeToDateTime(reader.Get<Int64>("Issued"));
-                    b.BanExpires = reader.Get<Int64>("Issued");
-                    bans.Add(b);
-                }
-            }
+			if (lookup.Banner != null)
+			{
+				if (queryWhere != "")
+					queryWhere += " OR ";
+				queryWhere += "Bans.BanningUser = @" + index.ToString();
+				index++;
+				args.Add(lookup.Banner.ID);
+			}
 
-            return bans;
+	        if (queryWhere != "WHERE ")
+	        {
+		        var query = String.Format("SELECT * FROM Bans {0}", queryWhere);
+
+		        using (var reader = database.QueryReader(query, args.ToArray()))
+		        {
+			        while (reader.Read())
+			        {
+				        int row = reader.Get<Int32>("RowID");
+				        Ban b = new Ban(reader.Get<string>("IP"),
+					        reader.Get<Int32>("ID"),
+					        reader.Get<string>("UserAccountName"),
+					        reader.Get<string>("CharacterName"));
+				        b.Banner = TShock.Users.GetUserByID((int) reader.Get<Int32>("BanningUser"));
+				        b.BanIssued = Utils.UnixTimeToDateTime(reader.Get<Int64>("Issued"));
+				        b.BanExpires = reader.Get<Int64>("Expiration");
+				        b.RowId = row;
+				        b.BanReason = reader.Get<string>("Reason");
+				        bans.Add(b);
+			        }
+		        }
+	        }
+	        return bans;
         }
     }
 }
